@@ -35,6 +35,10 @@ DRUM_STYLES = ("rock", "ballad", "shuffle", "waltz", "sixeight", "march", "stomp
 MAX_PARTS = 3
 MAX_VELOCITY = {"bass": 84, "parts": 66}
 MAX_PART_NOTES = 600
+# One song over the limits on purpose, taken as written (Poodleskirt,
+# 2026-10-16: "don't trim it to fit ... hardcode an exception"): HmWhyNot's
+# Tamacun, 311 notes, max_seconds 70, a 1649-note guitar part.
+LIMIT_EXCEPTIONS = {"PLAY_TAMACUN"}
 
 REQUIRED = ("name", "artist", "contributor", "notes", "bpm", "beats", "letters", "key",
             "part", "sources")
@@ -82,11 +86,11 @@ def _num(v: Any) -> float | None:
     return float(v)
 
 
-def _note_list_errors(where: str, notes: Any) -> list[str]:
+def _note_list_errors(where: str, notes: Any, exempt: bool = False) -> list[str]:
     errs = []
     if not isinstance(notes, list) or not notes:
         return [f"{where}.notes must be a non-empty list of [beat, midi_pitch, length_beats]"]
-    if len(notes) > MAX_PART_NOTES:
+    if len(notes) > MAX_PART_NOTES and not exempt:
         errs.append(f"{where}.notes has {len(notes)} notes; at most {MAX_PART_NOTES}")
     for i, n in enumerate(notes):
         ok = (isinstance(n, list) and len(n) == 3 and _num(n[0]) is not None
@@ -98,7 +102,7 @@ def _note_list_errors(where: str, notes: Any) -> list[str]:
     return errs
 
 
-def _instrument_errors(where: str, v: Any, max_vel: int = 127) -> list[str]:
+def _instrument_errors(where: str, v: Any, max_vel: int = 127, exempt: bool = False) -> list[str]:
     if not isinstance(v, dict):
         return [f"{where} must be an object {{program, velocity, notes}}"]
     errs = []
@@ -111,7 +115,7 @@ def _instrument_errors(where: str, v: Any, max_vel: int = 127) -> list[str]:
     vel = v.get("velocity", min(80, max_vel))
     if not isinstance(vel, int) or isinstance(vel, bool) or not 1 <= vel <= max_vel:
         errs.append(f"{where}.velocity must be 1-{max_vel} (the ocarina has to stay on top)")
-    return errs + _note_list_errors(where, v.get("notes"))
+    return errs + _note_list_errors(where, v.get("notes"), exempt)
 
 
 def validate_entry(key: str, entry: Any) -> list[str]:
@@ -143,7 +147,7 @@ def validate_entry(key: str, entry: Any) -> list[str]:
 
     notes = entry.get("notes")
     if "notes" in entry:
-        if not isinstance(notes, list) or not 2 <= len(notes) <= MAX_NOTES:
+        if not isinstance(notes, list) or not 2 <= len(notes) <= (10 ** 4 if key in LIMIT_EXCEPTIONS else MAX_NOTES):
             errs.append(f"\"notes\" must be a list of 2-{MAX_NOTES} notes")
             notes = None
         else:
@@ -168,7 +172,7 @@ def validate_entry(key: str, entry: Any) -> list[str]:
         errs.append("\"rhythm\" must be text without line breaks (how you got the beats and tempo)")
     if "max_seconds" in entry:
         ms = _num(entry["max_seconds"])
-        if ms is None or not 5 <= ms <= CONTRIB_MAX_SECONDS:
+        if ms is None or not 5 <= ms <= (90.0 if key in LIMIT_EXCEPTIONS else CONTRIB_MAX_SECONDS):
             errs.append(f"\"max_seconds\" must be 5-{CONTRIB_MAX_SECONDS:g}")
 
     d = entry.get("drums")
@@ -194,14 +198,14 @@ def validate_entry(key: str, entry: Any) -> list[str]:
             if "ending" in spec and not isinstance(spec["ending"], bool):
                 errs.append("\"drums\".ending must be true or false")
     if "bass" in entry:
-        errs += _instrument_errors("bass", entry["bass"], MAX_VELOCITY["bass"])
+        errs += _instrument_errors("bass", entry["bass"], MAX_VELOCITY["bass"], key in LIMIT_EXCEPTIONS)
     if "parts" in entry:
         parts = entry["parts"]
         if not isinstance(parts, list) or not 1 <= len(parts) <= MAX_PARTS:
             errs.append(f"\"parts\" must be a list of 1-{MAX_PARTS} instruments")
         else:
             for i, p in enumerate(parts):
-                errs += _instrument_errors(f"parts[{i}]", p, MAX_VELOCITY["parts"])
+                errs += _instrument_errors(f"parts[{i}]", p, MAX_VELOCITY["parts"], key in LIMIT_EXCEPTIONS)
 
     if not errs:
         # The whole song must fit its time cap: past it the harness drops notes.
